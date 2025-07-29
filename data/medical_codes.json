@@ -1,0 +1,24 @@
+{
+  "icd10": {
+    "Hypertension": "I10",
+    "Diabetes": "E11.9",
+    "Asthma": "J45.909",
+    "Heart Disease": "I25.10",
+    "Pneumonia": "J18.9",
+    "Stroke": "I63.9",
+    "Cancer": "C80.1",
+    "Arthritis": "M15.9",
+    "Depression": "F32.9",
+    "Anxiety": "F41.9",
+    "Obesity": "E66.9",
+    "Chronic Kidney Disease": "N18.9"
+  },
+  "cpt": {
+    "99213": "Office/outpatient visit established patient, 20-29 minutes",
+    "99214": "Office/outpatient visit established patient, 30-39 minutes",
+    "99215": "Office/outpatient visit established patient, 40-54 minutes",
+    "99203": "Office/outpatient visit new patient, 30-44 minutes",
+    "99204": "Office/outpatient visit new patient, 45-59 minutes",
+    "99205": "Office/outpatient visit new patient, 60-74 minutes"
+  }
+}

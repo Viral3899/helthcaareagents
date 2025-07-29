@@ -1,0 +1,55 @@
+{
+  "interactions": {
+    "warfarin": [
+      "aspirin",
+      "ibuprofen",
+      "heparin"
+    ],
+    "aspirin": [
+      "warfarin",
+      "ibuprofen",
+      "heparin"
+    ],
+    "ibuprofen": [
+      "warfarin",
+      "aspirin"
+    ],
+    "heparin": [
+      "warfarin",
+      "aspirin"
+    ],
+    "metformin": [
+      "insulin",
+      "glipizide"
+    ],
+    "insulin": [
+      "metformin",
+      "glipizide"
+    ],
+    "glipizide": [
+      "metformin",
+      "insulin"
+    ]
+  },
+  "contraindications": {
+    "warfarin": [
+      "pregnancy",
+      "bleeding_disorders"
+    ],
+    "aspirin": [
+      "bleeding_disorders",
+      "stomach_ulcers"
+    ],
+    "ibuprofen": [
+      "kidney_disease",
+      "stomach_ulcers"
+    ],
+    "metformin": [
+      "kidney_disease",
+      "heart_failure"
+    ],
+    "insulin": [
+      "hypoglycemia"
+    ]
+  }
+}
