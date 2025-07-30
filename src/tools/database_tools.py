@@ -3,6 +3,29 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging
 from database.connection import get_db_session
+import uuid
+from datetime import datetime
+
+def generate_unique_mrn():
+    """Generate a unique Medical Record Number that doesn't exist in the database"""
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        # Format: MRN-YYYY-XXXXX (e.g., MRN-2024-12345)
+        year = datetime.now().year
+        # Generate a 5-digit random number
+        random_part = str(uuid.uuid4().int % 100000).zfill(5)
+        mrn = f"MRN-{year}-{random_part}"
+        
+        # Check if MRN already exists
+        with get_db_session() as session:
+            from database.models import Patient
+            existing = session.query(Patient).filter(Patient.mrn == mrn).first()
+            if not existing:
+                return mrn
+    
+    # If we can't find a unique MRN after max attempts, add timestamp
+    timestamp = datetime.now().strftime("%H%M%S")
+    return f"MRN-{datetime.now().year}-{timestamp}"
 
 def execute_query(query, params=None):
     """Execute a raw SQL query using SQLAlchemy session and return results as list of dicts."""

@@ -1,9 +1,16 @@
 from flask import Blueprint, render_template_string, request, redirect, url_for, flash
 from database.connection import get_db_session
 from database.models import Patient
+from tools.database_tools import generate_unique_mrn
 import json
+import uuid
+from datetime import datetime
 
 patient_form_bp = Blueprint('patient_form', __name__)
+
+def generate_mrn():
+    """Generate a unique Medical Record Number"""
+    return generate_unique_mrn()
 
 PATIENT_FORM_HTML = '''
 <!DOCTYPE html>
@@ -23,6 +30,8 @@ PATIENT_FORM_HTML = '''
     button:hover { background: #375fa0; }
     .success { color: green; margin-top: 20px; text-align: center; }
     .error { color: red; margin-top: 20px; text-align: center; }
+    .mrn-display { background: #f0f8ff; padding: 10px; border-radius: 6px; margin-bottom: 20px; text-align: center; }
+    .mrn-display strong { color: #4f8cff; }
   </style>
 </head>
 <body>
@@ -31,75 +40,94 @@ PATIENT_FORM_HTML = '''
     {% if message %}
       <div class="{{ 'success' if success else 'error' }}">{{ message }}</div>
     {% endif %}
+    
+    <div class="mrn-display">
+      <strong>Medical Record Number (MRN):</strong> {{ mrn }}
+    </div>
+    
     <form method="post" autocomplete="off">
+      <input type="hidden" name="mrn" value="{{ mrn }}">
+      
       <div class="row">
         <div>
-          <label>First Name</label>
+          <label>First Name *</label>
           <input type="text" name="first_name" required>
         </div>
         <div>
-          <label>Last Name</label>
+          <label>Last Name *</label>
           <input type="text" name="last_name" required>
         </div>
       </div>
-      <label>Date of Birth</label>
+      
+      <label>Date of Birth *</label>
       <input type="date" name="date_of_birth" required>
-      <label>Gender</label>
+      
+      <label>Gender *</label>
       <select name="gender" required>
         <option value="">Select...</option>
         <option>Male</option>
         <option>Female</option>
         <option>Other</option>
       </select>
-      <label>Phone</label>
+      
+      <label>Phone *</label>
       <input type="text" name="phone" required>
-      <label>Email</label>
+      
+      <label>Email *</label>
       <input type="email" name="email" required>
-      <label>Address</label>
+      
+      <label>Address *</label>
       <textarea name="address" required></textarea>
+      
       <h3>Emergency Contact</h3>
       <div class="row">
         <div>
-          <label>Name</label>
+          <label>Name *</label>
           <input type="text" name="emergency_contact_name" required>
         </div>
         <div>
-          <label>Relationship</label>
+          <label>Relationship *</label>
           <input type="text" name="emergency_contact_relationship" required>
         </div>
         <div>
-          <label>Phone</label>
+          <label>Phone *</label>
           <input type="text" name="emergency_contact_phone" required>
         </div>
       </div>
+      
       <h3>Insurance Info</h3>
       <div class="row">
         <div>
-          <label>Provider</label>
+          <label>Provider *</label>
           <input type="text" name="insurance_provider" required>
         </div>
         <div>
-          <label>Policy #</label>
+          <label>Policy # *</label>
           <input type="text" name="insurance_policy_number" required>
         </div>
         <div>
-          <label>Group #</label>
+          <label>Group # *</label>
           <input type="text" name="insurance_group_number" required>
         </div>
       </div>
+      
       <label>Allergies (comma separated)</label>
-      <input type="text" name="allergies">
+      <input type="text" name="allergies" placeholder="e.g., Penicillin, Peanuts">
+      
       <label>Medications (comma separated)</label>
-      <input type="text" name="medications">
+      <input type="text" name="medications" placeholder="e.g., Aspirin, Insulin">
+      
       <label>Medical History (comma separated)</label>
-      <input type="text" name="medical_history">
-      <label>Status</label>
+      <input type="text" name="medical_history" placeholder="e.g., Diabetes, Hypertension">
+      
+      <label>Status *</label>
       <select name="status" required>
         <option value="">Select...</option>
         <option>admitted</option>
         <option>discharged</option>
         <option>pending</option>
       </select>
+      
       <button type="submit">Submit Patient</button>
     </form>
   </div>
@@ -111,14 +139,31 @@ PATIENT_FORM_HTML = '''
 def patient_entry():
     message = None
     success = False
+    mrn = generate_mrn()
+    
     if request.method == 'POST':
         try:
             data = request.form
+            
+            # Backend validation for required fields
+            required_fields = [
+                'mrn', 'first_name', 'last_name', 'date_of_birth', 'gender', 'phone', 'email', 'address',
+                'emergency_contact_name', 'emergency_contact_relationship', 'emergency_contact_phone',
+                'insurance_provider', 'insurance_policy_number', 'insurance_group_number', 'status'
+            ]
+            missing = [field for field in required_fields if not data.get(field)]
+            if missing:
+                message = f"Missing required fields: {', '.join(missing)}"
+                success = False
+                return render_template_string(PATIENT_FORM_HTML, message=message, success=success, mrn=mrn)
+            
             with get_db_session() as session:
+                # Create patient with proper MRN
                 patient = Patient(
+                    mrn=data['mrn'],
                     first_name=data['first_name'],
                     last_name=data['last_name'],
-                    date_of_birth=data['date_of_birth'],
+                    date_of_birth=datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date(),
                     gender=data['gender'],
                     phone=data['phone'],
                     email=data['email'],
@@ -140,9 +185,16 @@ def patient_entry():
                 )
                 session.add(patient)
                 session.commit()
-            message = 'Patient added successfully!'
-            success = True
+                
+                message = f"Patient {data['first_name']} {data['last_name']} added successfully with MRN: {data['mrn']}"
+                success = True
+                
+                # Redirect to main chatbot page after successful submission
+                return redirect('/static/chatbot.html')
+                
         except Exception as e:
-            message = f'Error: {e}'
+            message = f'Error: {str(e)}'
             success = False
-    return render_template_string(PATIENT_FORM_HTML, message=message, success=success) 
+            print(f"Error creating patient: {e}")
+    
+    return render_template_string(PATIENT_FORM_HTML, message=message, success=success, mrn=mrn) 

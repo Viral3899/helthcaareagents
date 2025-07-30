@@ -181,11 +181,11 @@ def main():
         app.run(
             host=host,
             port=port,
-            debug=debug,
+            debug=True,
             threaded=True
         )
         
-    except KeyboardInterrupt:
+    except rrupt:
         print("\nShutting down Healthcare Management System...")
         sys.exit(0)
     except Exception as e:
@@ -194,3 +194,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
