@@ -71,7 +71,7 @@ seaborn==0.13.0
 plotly==5.17.0
 
 # HTTP and Async
-aiohttp==3.9.1
+aiohttp==3.12.14
 httpx==0.25.2
 websockets==12.0
 
