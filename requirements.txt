@@ -50,7 +50,7 @@ pymysql==1.1.0
 redis==5.0.1
 
 # AI and LLM
-langchain==0.0.350
+langchain==0.2.5
 langchain-groq==0.0.1
 langchain-community==0.0.1
 langchain-core==0.1.0
