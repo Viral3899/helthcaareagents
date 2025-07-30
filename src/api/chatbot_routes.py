@@ -1,5 +1,5 @@
 """
-Chatbot API Routes Module
+Chatbot API Routes Module - FIXED VERSION
 
 This module defines API endpoints for the chatbot functionality,
 including conversation management, context keeping, and message processing.
@@ -21,41 +21,50 @@ from utils.logger import log_api_event, log_chatbot_event
 # Create chatbot API blueprint
 chatbot_bp = Blueprint('chatbot', __name__)
 
-def get_request_data() -> Dict[str, Any]:
-    """Get request data with error handling"""
+def serialize_context_data(data):
+    """
+    Safely serialize context data, removing non-JSON serializable objects
+    """
+    if not data:
+        return {}
+    
+    if isinstance(data, dict):
+        serialized = {}
+        for key, value in data.items():
+            try:
+                # Test if value is JSON serializable
+                json.dumps(value)
+                serialized[key] = value
+            except (TypeError, ValueError):
+                # Skip non-serializable values or convert them
+                if hasattr(value, '__dict__'):
+                    serialized[key] = str(value)  # Convert to string representation
+                else:
+                    continue  # Skip non-serializable values
+        return serialized
+    
     try:
-        if request.is_json:
-            return request.get_json()
-        elif request.form:
-            return dict(request.form)
-        else:
-            return {}
-    except Exception as e:
-        return {"error": f"Invalid request data: {str(e)}"}
+        json.dumps(data)
+        return data
+    except (TypeError, ValueError):
+        return str(data) if data is not None else {}
 
-def create_response(success: bool, data: Any = None, message: str = "", status_code: int = 200) -> tuple:
-    """Create standardized API response"""
+def create_response(success: bool, data: Any = None, message: str = "", status_code: int = 200):
     response = {
         "success": success,
         "message": message,
         "timestamp": datetime.utcnow().isoformat()
     }
-    
     if data is not None:
         response["data"] = data
-    
     return jsonify(response), status_code
 
 @chatbot_bp.route('/chat', methods=['POST'])
 def chat():
-    """Process a chat message and return response"""
     start_time = datetime.utcnow()
-    
     try:
-        data = get_request_data()
-        
-        # Validate required fields
-        if not data.get('message'):
+        data = request.get_json()
+        if not data or not data.get('message'):
             return create_response(False, message="Message is required", status_code=400)
         
         message = data['message']
@@ -66,22 +75,20 @@ def chat():
         # Get chatbot agent
         agents = current_app.config.get('AGENTS', {})
         chatbot_agent = agents.get('chatbot')
-        
         if not chatbot_agent:
             return create_response(False, message="Chatbot agent not available", status_code=503)
         
-        # Process message
+        # Process message (sync call for Flask)
         response = chatbot_agent.process_message(session_id, message, user_id, patient_id)
         
-        # Prepare response data
         response_data = {
             "session_id": session_id,
-            "message": response.message,
-            "intent": response.intent,
-            "confidence": response.confidence,
-            "entities": response.entities,
-            "actions": response.actions,
-            "suggestions": response.suggestions,
+            "message": response.message if hasattr(response, 'message') else str(response),
+            "intent": getattr(response, 'intent', None),
+            "confidence": getattr(response, 'confidence', None),
+            "entities": getattr(response, 'entities', []),
+            "actions": getattr(response, 'actions', []),
+            "suggestions": getattr(response, 'suggestions', []),
             "response_time": getattr(response, 'response_time', 0.0)
         }
         
@@ -94,72 +101,60 @@ def chat():
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event('/chatbot/chat', 'POST', 500, duration)
+        current_app.logger.error(f"Chat processing error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Chat processing failed: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/conversations', methods=['GET'])
 def get_conversations():
-    """Get all conversations for a user"""
     start_time = datetime.utcnow()
-    
     try:
         user_id = request.args.get('user_id')
-        session_id = request.args.get('session_id')
-        status = request.args.get('status', 'active')
-        limit = min(request.args.get('limit', 20, type=int), 100)
+        patient_id = request.args.get('patient_id')
+        limit = min(int(request.args.get('limit', 50)), 100)
         
         with get_db_session() as session:
             query = session.query(ChatbotConversation)
             
             if user_id:
                 query = query.filter(ChatbotConversation.user_id == user_id)
-            if session_id:
-                query = query.filter(ChatbotConversation.session_id == session_id)
-            if status:
-                query = query.filter(ChatbotConversation.status == status)
-            
-            conversations = query.order_by(desc(ChatbotConversation.updated_at)).limit(limit).all()
+            if patient_id:
+                query = query.filter(ChatbotConversation.patient_id == patient_id)
+                
+            conversations = query.order_by(desc(ChatbotConversation.created_at)).limit(limit).all()
             
             conversation_data = []
             for conv in conversations:
-                # Get message count
-                message_count = session.query(ChatbotMessage).filter(
-                    ChatbotMessage.conversation_id == conv.id
-                ).count()
-                
                 conversation_data.append({
-                    "id": str(conv.id),
                     "session_id": conv.session_id,
                     "user_id": conv.user_id,
-                    "patient_id": str(conv.patient_id) if conv.patient_id else None,
-                    "conversation_type": conv.conversation_type,
+                    "patient_id": conv.patient_id,
                     "status": conv.status,
-                    "message_count": message_count,
+                    "message_count": conv.message_count,
                     "created_at": conv.created_at.isoformat(),
-                    "updated_at": conv.updated_at.isoformat(),
-                    "closed_at": conv.closed_at.isoformat() if conv.closed_at else None,
-                    "conversation_metadata": conv.conversation_metadata
+                    "updated_at": conv.updated_at.isoformat() if conv.updated_at else None
                 })
             
             duration = (datetime.utcnow() - start_time).total_seconds()
             log_api_event('/chatbot/conversations', 'GET', 200, duration)
             
-            return create_response(True, conversation_data, f"Retrieved {len(conversation_data)} conversations")
+            return create_response(True, {
+                "conversations": conversation_data,
+                "total_count": len(conversation_data)
+            }, "Conversations retrieved successfully")
             
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event('/chatbot/conversations', 'GET', 500, duration)
+        current_app.logger.error(f"Get conversations error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to retrieve conversations: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/conversations/<session_id>/messages', methods=['GET'])
-def get_conversation_messages(session_id: str):
-    """Get messages for a specific conversation"""
+def get_conversation_messages(session_id):
     start_time = datetime.utcnow()
-    
     try:
-        limit = min(request.args.get('limit', 50, type=int), 200)
+        limit = min(int(request.args.get('limit', 100)), 200)
         
         with get_db_session() as session:
-            # Get conversation
             conversation = session.query(ChatbotConversation).filter(
                 ChatbotConversation.session_id == session_id
             ).first()
@@ -167,75 +162,77 @@ def get_conversation_messages(session_id: str):
             if not conversation:
                 return create_response(False, message="Conversation not found", status_code=404)
             
-            # Get messages
-            messages = session.query(ChatbotMessage).filter(
-                ChatbotMessage.conversation_id == conversation.id
-            ).order_by(ChatbotMessage.created_at).limit(limit).all()
+            messages = session.query(ChatbotMessage)\
+                .filter(ChatbotMessage.session_id == session_id)\
+                .order_by(ChatbotMessage.timestamp)\
+                .limit(limit)\
+                .all()
             
-            message_data = [
-                {
-                    "id": str(msg.id),
-                    "type": msg.message_type,
-                    "content": msg.content,
+            message_data = []
+            for msg in messages:
+                message_data.append({
+                    "id": msg.id,
+                    "session_id": msg.session_id,
+                    "message": msg.message,
+                    "response": msg.response,
                     "intent": msg.intent,
                     "confidence": msg.confidence,
-                    "entities": msg.entities,
-                    "response_time": msg.response_time,
-                    "created_at": msg.created_at.isoformat()
-                }
-                for msg in messages
-            ]
+                    "entities": serialize_context_data(msg.entities),  # Safe serialization
+                    "timestamp": msg.timestamp.isoformat()
+                })
             
             duration = (datetime.utcnow() - start_time).total_seconds()
             log_api_event(f'/chatbot/conversations/{session_id}/messages', 'GET', 200, duration)
             
-            return create_response(True, message_data, f"Retrieved {len(message_data)} messages")
+            return create_response(True, {
+                "session_id": session_id,
+                "messages": message_data,
+                "total_count": len(message_data)
+            }, "Messages retrieved successfully")
             
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event(f'/chatbot/conversations/{session_id}/messages', 'GET', 500, duration)
+        current_app.logger.error(f"Get messages error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to retrieve messages: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/conversations/<session_id>/close', methods=['POST'])
-def close_conversation(session_id: str):
-    """Close a conversation"""
+def close_conversation(session_id):
     start_time = datetime.utcnow()
-    
+    db_session = None
     try:
-        # Get chatbot agent
-        agents = current_app.config.get('AGENTS', {})
-        chatbot_agent = agents.get('chatbot')
-        
-        if chatbot_agent:
-            chatbot_agent.close_conversation(session_id)
-        
-        with get_db_session() as session:
-            conversation = session.query(ChatbotConversation).filter(
-                ChatbotConversation.session_id == session_id,
-                ChatbotConversation.status == 'active'
+        with get_db_session() as db_session:
+            conversation = db_session.query(ChatbotConversation).filter(
+                ChatbotConversation.session_id == session_id
             ).first()
             
-            if conversation:
-                conversation.status = 'closed'
-                conversation.closed_at = datetime.utcnow()
-                session.commit()
-        
-        duration = (datetime.utcnow() - start_time).total_seconds()
-        log_api_event(f'/chatbot/conversations/{session_id}/close', 'POST', 200, duration)
-        log_chatbot_event(session_id, 'conversation_closed', "Conversation closed by user")
-        
-        return create_response(True, message="Conversation closed successfully")
-        
+            if not conversation:
+                return create_response(False, message="Conversation not found", status_code=404)
+                
+            if conversation.status == "closed":
+                return create_response(False, message="Conversation already closed", status_code=400)
+            
+            conversation.status = "closed"
+            conversation.updated_at = datetime.utcnow()
+            db_session.commit()
+            
+            duration = (datetime.utcnow() - start_time).total_seconds()
+            log_api_event(f'/chatbot/conversations/{session_id}/close', 'POST', 200, duration)
+            log_chatbot_event(session_id, 'conversation_closed', "Conversation closed")
+            
+            return create_response(True, {"session_id": session_id}, "Conversation closed successfully")
+            
     except Exception as e:
+        if db_session:
+            db_session.rollback()
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event(f'/chatbot/conversations/{session_id}/close', 'POST', 500, duration)
+        current_app.logger.error(f"Close conversation error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to close conversation: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/context/<session_id>', methods=['GET'])
-def get_context(session_id: str):
-    """Get conversation context for a session"""
+def get_context(session_id):
     start_time = datetime.utcnow()
-    
     try:
         with get_db_session() as session:
             context = session.query(ChatbotContext).filter(
@@ -245,17 +242,13 @@ def get_context(session_id: str):
             if not context:
                 return create_response(False, message="Context not found", status_code=404)
             
+            # Safely serialize context data
             context_data = {
                 "session_id": context.session_id,
-                "user_id": context.user_id,
-                "patient_id": str(context.patient_id) if context.patient_id else None,
-                "context_data": context.context_data,
-                "conversation_history": context.conversation_history,
-                "user_preferences": context.user_preferences,
-                "system_state": context.system_state,
-                "last_activity": context.last_activity.isoformat(),
+                "context_data": serialize_context_data(context.context_data),
+                "metadata": serialize_context_data(context.metadata),
                 "created_at": context.created_at.isoformat(),
-                "updated_at": context.updated_at.isoformat()
+                "updated_at": context.updated_at.isoformat() if context.updated_at else None
             }
             
             duration = (datetime.utcnow() - start_time).total_seconds()
@@ -266,150 +259,218 @@ def get_context(session_id: str):
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event(f'/chatbot/context/{session_id}', 'GET', 500, duration)
+        current_app.logger.error(f"Get context error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to retrieve context: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/context/<session_id>', methods=['PUT'])
-def update_context(session_id: str):
-    """Update conversation context"""
+def update_context(session_id):
     start_time = datetime.utcnow()
-    
+    db_session = None
     try:
-        data = get_request_data()
+        data = request.get_json()
         
-        with get_db_session() as session:
-            context = session.query(ChatbotContext).filter(
+        with get_db_session() as db_session:
+            context = db_session.query(ChatbotContext).filter(
                 ChatbotContext.session_id == session_id
             ).first()
             
             if not context:
-                return create_response(False, message="Context not found", status_code=404)
+                # Create new context with conversation_history initialized
+                initial_context_data = {
+                    "conversation_history": [],  # Initialize empty conversation history
+                    "user_preferences": {},
+                    "session_metadata": {
+                        "created_at": datetime.utcnow().isoformat(),
+                        "last_activity": datetime.utcnow().isoformat()
+                    }
+                }
+                initial_context_data.update(data.get('context_data', {}))
+                
+                context = ChatbotContext(
+                    session_id=session_id,
+                    context_data=initial_context_data,
+                    metadata=data.get('metadata', {})
+                )
+                db_session.add(context)
+            else:
+                # Update existing context, ensuring conversation_history exists
+                existing_context = context.context_data or {}
+                if 'conversation_history' not in existing_context:
+                    existing_context['conversation_history'] = []
+                
+                # Merge new context data
+                new_context_data = data.get('context_data', {})
+                existing_context.update(new_context_data)
+                
+                context.context_data = existing_context
+                context.metadata = data.get('metadata', context.metadata or {})
+                context.updated_at = datetime.utcnow()
             
-            # Update context fields
-            if 'context_data' in data:
-                context.context_data.update(data['context_data'])
-            if 'user_preferences' in data:
-                context.user_preferences = data['user_preferences']
-            if 'system_state' in data:
-                context.system_state = data['system_state']
-            
-            context.last_activity = datetime.utcnow()
-            session.commit()
+            db_session.commit()
             
             duration = (datetime.utcnow() - start_time).total_seconds()
             log_api_event(f'/chatbot/context/{session_id}', 'PUT', 200, duration)
             log_chatbot_event(session_id, 'context_updated', "Context updated")
             
-            return create_response(True, message="Context updated successfully")
+            return create_response(True, {"session_id": session_id}, "Context updated successfully")
             
     except Exception as e:
+        if db_session:
+            db_session.rollback()
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event(f'/chatbot/context/{session_id}', 'PUT', 500, duration)
+        current_app.logger.error(f"Update context error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to update context: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/sessions', methods=['POST'])
 def create_session():
-    """Create a new chat session"""
     start_time = datetime.utcnow()
-    
+    db_session = None
     try:
-        data = get_request_data()
-        user_id = data.get('user_id')
-        patient_id = data.get('patient_id')
-        
+        data = request.get_json()
         session_id = str(uuid.uuid4())
         
-        # Initialize context
-        with get_db_session() as session:
+        with get_db_session() as db_session:
+            # Create conversation
+            conversation = ChatbotConversation(
+                session_id=session_id,
+                user_id=data.get('user_id'),
+                patient_id=data.get('patient_id'),
+                status="active",
+                message_count=0
+            )
+            db_session.add(conversation)
+            
+            # Create initial context with proper structure
+            initial_context_data = {
+                "session_start": datetime.utcnow().isoformat(),
+                "user_id": data.get('user_id'),
+                "patient_id": data.get('patient_id'),
+                "conversation_history": [],  # Initialize empty conversation history
+                "user_preferences": {},
+                "current_topic": None,
+                "last_intent": None
+            }
+            
             context = ChatbotContext(
                 session_id=session_id,
-                user_id=user_id,
-                patient_id=patient_id,
-                context_data={
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "patient_id": patient_id,
-                    "conversation_history": [],
-                    "current_topic": None,
-                    "user_preferences": {},
-                    "system_state": "ready",
-                    "last_patient_lookup": None,
-                    "pending_actions": []
+                context_data=initial_context_data,
+                metadata={
+                    "created_by": "api",
+                    "initial_message": data.get('initial_message'),
+                    "session_type": "chat",
+                    "platform": data.get('platform', 'web')
                 }
             )
-            session.add(context)
-            session.commit()
-        
-        # Create conversation
-        conversation = ChatbotConversation(
-            session_id=session_id,
-            user_id=user_id,
-            patient_id=patient_id,
-            conversation_type='general',
-            status='active'
-        )
-        session.add(conversation)
-        session.commit()
-        
-        session_data = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "patient_id": patient_id,
-            "created_at": datetime.utcnow().isoformat()
-        }
-        
-        duration = (datetime.utcnow() - start_time).total_seconds()
-        log_api_event('/chatbot/sessions', 'POST', 201, duration)
-        log_chatbot_event(session_id, 'session_created', "New chat session created")
-        
-        return create_response(True, session_data, "Session created successfully", 201)
-        
+            db_session.add(context)
+            
+            # Process initial message if provided
+            if data.get('initial_message'):
+                # Add user message
+                user_message = ChatbotMessage(
+                    session_id=session_id,
+                    message_type='user',
+                    message=data['initial_message'],
+                    intent="greeting",
+                    confidence=1.0,
+                    entities={},
+                    timestamp=datetime.utcnow()
+                )
+                db_session.add(user_message)
+                
+                # Add bot response message
+                bot_message = ChatbotMessage(
+                    session_id=session_id,
+                    message_type='bot',
+                    message="Hello! I'm your healthcare assistant. How can I help you today?",
+                    response="Hello! I'm your healthcare assistant. How can I help you today?",
+                    intent="greeting_response",
+                    confidence=1.0,
+                    entities={},
+                    timestamp=datetime.utcnow()
+                )
+                db_session.add(bot_message)
+                
+                conversation.message_count = 2
+                
+                # Update context with initial conversation
+                initial_context_data["conversation_history"] = [
+                    {
+                        "role": "user",
+                        "message": data['initial_message'],
+                        "timestamp": datetime.utcnow().isoformat()
+                    },
+                    {
+                        "role": "assistant", 
+                        "message": "Hello! I'm your healthcare assistant. How can I help you today?",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                ]
+                context.context_data = initial_context_data
+            
+            db_session.commit()
+            
+            duration = (datetime.utcnow() - start_time).total_seconds()
+            log_api_event('/chatbot/sessions', 'POST', 201, duration)
+            log_chatbot_event(session_id, 'session_created', "New session created")
+            
+            return create_response(True, {
+                "session_id": session_id,
+                "user_id": data.get('user_id'),
+                "patient_id": data.get('patient_id'),
+                "status": "active"
+            }, "Session created successfully", 201)
+            
     except Exception as e:
+        if db_session:
+            db_session.rollback()
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event('/chatbot/sessions', 'POST', 500, duration)
+        current_app.logger.error(f"Create session error: {str(e)}", exc_info=True)
         return create_response(False, message=f"Failed to create session: {str(e)}", status_code=500)
 
 @chatbot_bp.route('/analytics', methods=['GET'])
 def get_chatbot_analytics():
-    """Get chatbot analytics and usage statistics"""
     start_time = datetime.utcnow()
-    
     try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
         with get_db_session() as session:
-            # Get basic statistics
-            total_conversations = session.query(ChatbotConversation).count()
-            active_conversations = session.query(ChatbotConversation).filter(
-                ChatbotConversation.status == 'active'
-            ).count()
-            total_messages = session.query(ChatbotMessage).count()
+            query = session.query(ChatbotConversation)
             
-            # Get intent distribution
-            intent_counts = session.query(
-                ChatbotMessage.intent,
-                session.query(ChatbotMessage).filter(ChatbotMessage.intent == ChatbotMessage.intent).count().label('count')
-            ).filter(ChatbotMessage.intent.isnot(None)).group_by(ChatbotMessage.intent).all()
+            if start_date:
+                try:
+                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    query = query.filter(ChatbotConversation.created_at >= start_dt)
+                except ValueError:
+                    return create_response(False, message="Invalid start_date format", status_code=400)
+                    
+            if end_date:
+                try:
+                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    query = query.filter(ChatbotConversation.created_at <= end_dt)
+                except ValueError:
+                    return create_response(False, message="Invalid end_date format", status_code=400)
             
-            # Get recent activity
-            recent_messages = session.query(ChatbotMessage).order_by(
-                desc(ChatbotMessage.created_at)
-            ).limit(10).all()
+            conversations = query.all()
+            
+            total_conversations = len(conversations)
+            active_conversations = len([c for c in conversations if c.status == "active"])
+            closed_conversations = len([c for c in conversations if c.status == "closed"])
+            total_messages = sum(c.message_count for c in conversations)
+            avg_messages = total_messages / total_conversations if total_conversations > 0 else 0
             
             analytics_data = {
                 "total_conversations": total_conversations,
                 "active_conversations": active_conversations,
+                "closed_conversations": closed_conversations,
                 "total_messages": total_messages,
-                "intent_distribution": [
-                    {"intent": intent, "count": count}
-                    for intent, count in intent_counts
-                ],
-                "recent_activity": [
-                    {
-                        "id": str(msg.id),
-                        "type": msg.message_type,
-                        "intent": msg.intent,
-                        "created_at": msg.created_at.isoformat()
-                    }
-                    for msg in recent_messages
-                ]
+                "average_messages_per_conversation": round(avg_messages, 2),
+                "period": {
+                    "start_date": start_date,
+                    "end_date": end_date
+                }
             }
             
             duration = (datetime.utcnow() - start_time).total_seconds()
@@ -420,4 +481,5 @@ def get_chatbot_analytics():
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
         log_api_event('/chatbot/analytics', 'GET', 500, duration)
-        return create_response(False, message=f"Failed to retrieve analytics: {str(e)}", status_code=500) 
+        current_app.logger.error(f"Get analytics error: {str(e)}", exc_info=True)
+        return create_response(False, message=f"Failed to retrieve analytics: {str(e)}", status_code=500)

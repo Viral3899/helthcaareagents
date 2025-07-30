@@ -1,96 +1,109 @@
 #!/usr/bin/env python3
 """
-Test script to verify chatbot fixes
+Test script to check chatbot session creation
 """
 
 import sys
 import os
-from pathlib import Path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-# Add src directory to Python path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+from database.connection import init_database, get_db_session
+from database.models import ChatbotConversation, ChatbotContext, ChatbotMessage
+from datetime import datetime
+import uuid
 
-def test_chatbot_response():
-    """Test the ChatbotResponse dataclass"""
-    from agents.chatbot_agent import ChatbotResponse
-    
-    # Test creating a response with default response_time
-    response = ChatbotResponse(
-        message="Hello, how can I help you?",
-        intent="general_help",
-        confidence=0.8,
-        entities={},
-        actions=[],
-        context_update={},
-        suggestions=["Ask about patients", "Schedule appointment"]
-    )
-    
-    print(f"✅ ChatbotResponse created successfully")
-    print(f"   Message: {response.message}")
-    print(f"   Intent: {response.intent}")
-    print(f"   Response time: {response.response_time}")
-    
-    # Test accessing response_time attribute
+def test_session_creation():
+    """Test chatbot session creation"""
     try:
-        response_time = response.response_time
-        print(f"✅ response_time attribute accessible: {response_time}")
-    except AttributeError as e:
-        print(f"❌ response_time attribute error: {e}")
-        return False
-    
-    return True
-
-def test_intent_analysis_fallback():
-    """Test the intent analysis fallback mechanism"""
-    from agents.chatbot_agent import ChatbotAgent
-    
-    # Create a mock tools dictionary
-    tools = {}
-    
-    # Create chatbot agent
-    agent = ChatbotAgent(tools)
-    
-    # Test intent analysis with various messages
-    test_messages = [
-        "I need to find patient John Smith",
-        "Can you schedule an appointment for me?",
-        "Show me the medical records",
-        "This is an emergency situation",
-        "What are the vital signs?",
-        "Hello, how are you?"
-    ]
-    
-    context = {"conversation_history": []}
-    
-    for message in test_messages:
+        print("Initializing database...")
+        init_database()
+        print("Database initialized successfully")
+        
+        print("Testing session creation...")
+        session_id = str(uuid.uuid4())
+        
+        session_gen = get_db_session()
+        session = next(session_gen)
         try:
-            intent_analysis = agent._analyze_intent(message, context)
-            print(f"✅ Intent analysis for '{message[:30]}...': {intent_analysis['intent']}")
-        except Exception as e:
-            print(f"❌ Intent analysis failed for '{message[:30]}...': {e}")
-            return False
-    
-    return True
+            # Create conversation
+            conversation = ChatbotConversation(
+                session_id=session_id,
+                user_id='test_user',
+                patient_id=None,
+                status="active",
+                message_count=0
+            )
+            session.add(conversation)
+            session.flush()  # Get the ID
+            
+            # Create initial context
+            context = ChatbotContext(
+                session_id=session_id,
+                context_data={
+                    "session_start": datetime.utcnow().isoformat(),
+                    "user_id": 'test_user',
+                    "patient_id": None
+                },
+                metadata={
+                    "created_by": "test",
+                    "initial_message": "Hello"
+                }
+            )
+            session.add(context)
+            
+            # Process initial message
+            message = ChatbotMessage(
+                conversation_id=conversation.id,
+                message_type='user',
+                content="Hello",
+                intent="greeting",
+                confidence=1.0,
+                entities=[],
+                created_at=datetime.utcnow()
+            )
+            session.add(message)
+            
+            # Add bot response message
+            bot_message = ChatbotMessage(
+                conversation_id=conversation.id,
+                message_type='bot',
+                content="Hello! I'm your healthcare assistant. How can I help you today?",
+                intent="greeting",
+                confidence=1.0,
+                entities=[],
+                created_at=datetime.utcnow()
+            )
+            session.add(bot_message)
+            conversation.message_count = 2
+            
+            session.commit()
+            print("Session created successfully!")
+            
+            # Verify the session was created
+            created_conversation = session.query(ChatbotConversation).filter(
+                ChatbotConversation.session_id == session_id
+            ).first()
+            
+            if created_conversation:
+                print(f"Conversation found: {created_conversation.id}")
+                print(f"Message count: {created_conversation.message_count}")
+                
+                messages = session.query(ChatbotMessage).filter(
+                    ChatbotMessage.conversation_id == created_conversation.id
+                ).all()
+                
+                print(f"Messages found: {len(messages)}")
+                for msg in messages:
+                    print(f"  - {msg.message_type}: {msg.content}")
+            else:
+                print("ERROR: Conversation not found!")
+        finally:
+            session.close()
+                
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    print("Testing chatbot fixes...")
-    
-    # Test 1: ChatbotResponse dataclass
-    if test_chatbot_response():
-        print("✅ ChatbotResponse test passed")
-    else:
-        print("❌ ChatbotResponse test failed")
-        sys.exit(1)
-    
-    # Test 2: Intent analysis fallback
-    if test_intent_analysis_fallback():
-        print("✅ Intent analysis fallback test passed")
-    else:
-        print("❌ Intent analysis fallback test failed")
-        sys.exit(1)
-    
-    print("\n🎉 All tests passed! The chatbot fixes are working correctly.")
-    print("\nYou can now:")
-    print("1. Start the application: python src/main.py")
-    print("2. Access the chatbot UI: http://localhost:5000/chatbot")
-    print("3. Test the chatbot functionality") 
+    test_session_creation() 

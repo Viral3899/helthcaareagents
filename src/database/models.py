@@ -261,6 +261,7 @@ class ChatbotConversation(Base):
     patient_id = Column(String(36), ForeignKey('patients.id'))  # Optional patient context
     conversation_type = Column(String(50), default='general')  # general, triage, emergency, etc.
     status = Column(String(20), default='active')  # active, closed, archived
+    message_count = Column(Integer, default=0)  # Number of messages in conversation
     context_data = Column(JSON)  # Store conversation context
     conversation_metadata = Column(JSON)  # Additional metadata
     created_at = Column(DateTime, default=datetime.utcnow)

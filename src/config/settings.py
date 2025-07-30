@@ -12,7 +12,7 @@ class Config:
     DATABASE_PASSWORD = os.getenv('DATABASE_PASSWORD', 'password')
     
     # LLM Configuration
-    GROQ_API_KEY = os.getenv('GROQ_API_KEY',)
+    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
     GROQ_MODEL = os.getenv('GROQ_MODEL', 'mixtral-8x7b-32768')
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', '0.1'))
     LLM_MAX_TOKENS = int(os.getenv('LLM_MAX_TOKENS', '2048'))
